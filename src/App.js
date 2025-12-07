@@ -74,7 +74,6 @@ try {
 
 if (!firebaseConfig) {
   firebaseConfig = {
-    // 高橋さんの合鍵情報
     apiKey: "AIzaSyD_0rHXb4wH9qQMtnTPdjoPapLijt0Zc8E",
     authDomain: "lantana-cafe-app.firebaseapp.com",
     projectId: "lantana-cafe-app",
@@ -443,7 +442,6 @@ export default function App() {
     }
   };
 
-  // --- Logic: Transfer Savings to Funds ---
   const transferSavingsToFunds = async (amount) => {
     if (amount <= 0) return;
     if (
@@ -683,7 +681,6 @@ export default function App() {
       totalSalesAll += order.total;
       dataByDate[d].orderCount += 1;
       dataByDate[d].rawOrders.push(order);
-
       if (order.items)
         order.items.forEach((item) => {
           const key =
@@ -716,11 +713,9 @@ export default function App() {
           expenseDetails: [],
           rawOrders: [],
         };
-
       dataByDate[d].expenses += exp.amount;
       totalExpensesAll += exp.amount;
       dataByDate[d].expenseDetails.push(exp);
-
       if (exp.payer === "高橋") dataByDate[d].takahashiPay += exp.amount;
       if (exp.payer === "浜田") dataByDate[d].hamadaPay += exp.amount;
       if (exp.payer === "ランタナ") dataByDate[d].lantanaPay += exp.amount;
@@ -730,17 +725,13 @@ export default function App() {
       b.date.localeCompare(a.date)
     );
 
-    // 基本の給料計算（全期間）
     const profit = totalSalesAll - totalExpensesAll;
     const baseProfit = profit > 0 ? profit : 0;
-
-    // 給料計算ロジック
     const defaultSalaryPerPerson = Math.floor(baseProfit / 2 / 1000) * 1000;
     const finalSalaryPerPerson =
       manualSalary !== null ? manualSalary : defaultSalaryPerPerson;
     const lantanaSavings = profit - finalSalaryPerPerson * 2;
 
-    // 資金残高の計算
     const totalFundsAdded = funds.reduce((sum, f) => sum + f.amount, 0);
     const totalLantanaExpenses = expenses
       .filter((e) => e.payer === "ランタナ")
@@ -766,7 +757,7 @@ export default function App() {
     [orders, expenses, funds, manualSalary]
   );
 
-  // --- Render Functions ---
+  // --- Render Functions (Defined BEFORE return) ---
 
   const renderFunds = () => (
     <div className="max-w-2xl mx-auto space-y-6 pb-20">
@@ -1363,7 +1354,12 @@ export default function App() {
                                         </span>
                                         <button
                                           onClick={(e) =>
-                                            deleteExpense(e, exp.id)
+                                            deleteDocWrapper(
+                                              e,
+                                              "expenses",
+                                              exp.id,
+                                              "この経費記録を削除しますか？"
+                                            )
                                           }
                                           className="text-stone-400 hover:text-red-600 p-1 rounded-full hover:bg-red-50"
                                         >
@@ -1409,7 +1405,12 @@ export default function App() {
                                         </span>
                                         <button
                                           onClick={(e) =>
-                                            deleteOrder(e, order.id)
+                                            deleteDocWrapper(
+                                              e,
+                                              "orders",
+                                              order.id,
+                                              "この注文記録を削除しますか？\n売上から差し引かれます。"
+                                            )
                                           }
                                           className="text-stone-400 hover:text-red-600 p-1 rounded-full hover:bg-red-50"
                                         >
