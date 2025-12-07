@@ -11,7 +11,6 @@ import {
   collection,
   addDoc,
   query,
-  where,
   orderBy,
   onSnapshot,
   serverTimestamp,
@@ -39,6 +38,8 @@ import {
   DollarSign,
   ChevronDown,
   ChevronUp,
+  ChevronLeft,
+  ChevronRight,
   Receipt,
   AlertTriangle,
   Settings,
@@ -56,7 +57,6 @@ import {
   ArrowRightCircle,
   BarChart3,
   Download,
-  Calendar,
 } from "lucide-react";
 
 // --- Firebase Initialization ---
@@ -243,14 +243,16 @@ export default function App() {
 
   const [manualSalary, setManualSalary] = useState(null);
   const [deleteModal, setDeleteModal] = useState(null);
-  const [analysisPeriod, setAnalysisPeriod] = useState("week"); // 分析期間ステート
+  const [analysisPeriod, setAnalysisPeriod] = useState("week");
+  const [currentMonth, setCurrentMonth] = useState(
+    new Date().toISOString().slice(0, 7)
+  );
 
   useEffect(() => {
     const script = document.createElement("script");
     script.src = "https://cdn.tailwindcss.com";
     document.head.appendChild(script);
 
-    // アプリアイコン設定
     const iconUrl =
       "data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Crect width='100' height='100' rx='20' fill='%23ea580c'/%3E%3Ctext x='50' y='70' font-size='50' text-anchor='middle' fill='white'%3E☕️%3C/text%3E%3C/svg%3E";
     let link = document.querySelector("link[rel~='icon']");
@@ -284,7 +286,6 @@ export default function App() {
     return item.basePrice;
   };
 
-  // --- Auth & Data Fetching ---
   useEffect(() => {
     const initAuth = async () => {
       try {
@@ -443,7 +444,6 @@ export default function App() {
     };
   }, [user]);
 
-  // --- Logic Helpers ---
   const confirmDelete = (e, collectionName, id, message) => {
     e.stopPropagation();
     setDeleteModal({ collection: collectionName, id: id, message: message });
@@ -485,7 +485,7 @@ export default function App() {
           date: new Date().toISOString().split("T")[0],
           amount: amount,
           type: "入金",
-          note: "帳簿より端数貯金繰入",
+          note: `${currentMonth}分 帳簿より端数貯金繰入`,
           createdAt: serverTimestamp(),
         }
       );
@@ -510,10 +510,7 @@ export default function App() {
     const encodedUri = encodeURI(csvContent);
     const link = document.createElement("a");
     link.setAttribute("href", encodedUri);
-    link.setAttribute(
-      "download",
-      `lantana_data_${new Date().toISOString().slice(0, 10)}.csv`
-    );
+    link.setAttribute("download", `lantana_data_${currentMonth}.csv`);
     document.body.appendChild(link);
     link.click();
     document.body.removeChild(link);
@@ -700,7 +697,13 @@ export default function App() {
     }
   };
 
-  // --- Logic: Aggregation ---
+  const changeMonth = (offset) => {
+    const d = new Date(currentMonth + "-01");
+    d.setMonth(d.getMonth() + offset);
+    setCurrentMonth(d.toISOString().slice(0, 7));
+    setManualSalary(null);
+  };
+
   const getAggregatedData = () => {
     const dataByDate = {};
     let totalSalesAll = 0;
@@ -708,7 +711,12 @@ export default function App() {
     let totalTax10Sales = 0;
     let totalTax8Sales = 0;
 
-    orders.forEach((order) => {
+    const targetOrders = orders.filter((o) => o.date.startsWith(currentMonth));
+    const targetExpenses = expenses.filter((e) =>
+      e.date.startsWith(currentMonth)
+    );
+
+    targetOrders.forEach((order) => {
       const d = order.date;
       if (!dataByDate[d])
         dataByDate[d] = {
@@ -756,7 +764,7 @@ export default function App() {
         });
     });
 
-    expenses.forEach((exp) => {
+    targetExpenses.forEach((exp) => {
       const d = exp.date;
       if (!dataByDate[d])
         dataByDate[d] = {
@@ -795,6 +803,17 @@ export default function App() {
       manualSalary !== null ? manualSalary : defaultSalaryPerPerson;
     const lantanaSavings = profit - finalSalaryPerPerson * 2;
 
+    const transferredAmount = funds
+      .filter(
+        (f) =>
+          f.date.startsWith(currentMonth) &&
+          f.type === "入金" &&
+          f.note.includes("繰入")
+      )
+      .reduce((sum, f) => sum + f.amount, 0);
+
+    const remainingLantanaSavings = lantanaSavings - transferredAmount;
+
     const totalFundsAdded = funds.reduce((sum, f) => sum + f.amount, 0);
     const totalLantanaExpenses = expenses
       .filter((e) => e.payer === "ランタナ")
@@ -815,13 +834,15 @@ export default function App() {
         salaryPerPerson: finalSalaryPerPerson,
         defaultSalaryPerPerson,
         lantanaSavings,
+        remainingLantanaSavings,
+        transferredAmount,
         totalTax,
         tax8,
         tax10,
         totalNetSales,
       },
       fundBalance: currentFundBalance,
-      menuRanking: getMenuRanking(orders),
+      menuRanking: getMenuRanking(targetOrders),
     };
   };
 
@@ -840,10 +861,9 @@ export default function App() {
 
   const aggregated = useMemo(
     () => getAggregatedData(),
-    [orders, expenses, funds, manualSalary]
+    [orders, expenses, funds, manualSalary, currentMonth]
   );
 
-  // --- Chart Data Calculation ---
   const chartData = useMemo(() => {
     const today = new Date();
     const data = [];
@@ -861,30 +881,28 @@ export default function App() {
         });
       }
     } else if (analysisPeriod === "month") {
-      for (let i = 29; i >= 0; i--) {
-        const d = new Date(today);
-        d.setDate(today.getDate() - i);
-        const dateStr = d.toISOString().split("T")[0];
+      const [y, m] = currentMonth.split("-");
+      const daysInMonth = new Date(y, m, 0).getDate();
+      for (let i = 1; i <= daysInMonth; i++) {
+        const dateStr = `${currentMonth}-${String(i).padStart(2, "0")}`;
         const dayData = aggregated.daily.find((row) => row.date === dateStr);
         data.push({
-          label: `${d.getDate()}`, // 日付だけ
-          fullLabel: `${d.getMonth() + 1}/${d.getDate()}`,
+          label: `${i}`,
+          fullLabel: `${m}/${i}`,
           value: dayData ? dayData.sales : 0,
           fullDate: dateStr,
         });
       }
     } else if (analysisPeriod === "year") {
-      // 過去12ヶ月（今月含む）
       for (let i = 11; i >= 0; i--) {
         const d = new Date(today.getFullYear(), today.getMonth() - i, 1);
         const monthStr = `${d.getFullYear()}-${String(
           d.getMonth() + 1
         ).padStart(2, "0")}`;
 
-        // その月のデータを集計
-        const monthlySales = aggregated.daily
-          .filter((row) => row.date.startsWith(monthStr))
-          .reduce((sum, row) => sum + row.sales, 0);
+        const monthlySales = orders
+          .filter((order) => order.date.startsWith(monthStr))
+          .reduce((sum, order) => sum + order.total, 0);
 
         data.push({
           label: `${d.getMonth() + 1}月`,
@@ -894,7 +912,7 @@ export default function App() {
       }
     }
     return data;
-  }, [aggregated.daily, analysisPeriod]);
+  }, [aggregated.daily, analysisPeriod, currentMonth, orders]);
 
   // --- Render Functions ---
 
@@ -903,8 +921,6 @@ export default function App() {
       <h2 className="text-xl font-bold text-stone-700 mb-6 flex items-center gap-2">
         <TrendingUp className="text-orange-600" /> 経営分析
       </h2>
-
-      {/* 期間切り替えボタン */}
       <div className="flex bg-stone-100 p-1 rounded-lg mb-4">
         {["week", "month", "year"].map((p) => (
           <button
@@ -916,22 +932,23 @@ export default function App() {
                 : "text-stone-400"
             }`}
           >
-            {p === "week" ? "1週間" : p === "month" ? "1ヶ月" : "1年"}
+            {p === "week"
+              ? "直近1週"
+              : p === "month"
+              ? `${currentMonth.split("-")[1]}月`
+              : "年間"}
           </button>
         ))}
       </div>
-
-      {/* 売上推移グラフ */}
       <Card className="p-4">
         <h3 className="font-bold text-stone-600 mb-4 flex items-center gap-2 text-sm">
-          <BarChart3 size={16} />
+          <BarChart3 size={16} />{" "}
           {analysisPeriod === "week"
             ? "直近7日間の売上"
             : analysisPeriod === "month"
-            ? "直近30日間の売上"
-            : "月別売上 (過去1年)"}
+            ? `${currentMonth} の日別売上`
+            : "過去1年の月別売上"}
         </h3>
-
         <div className="w-full overflow-x-auto">
           <div
             className={`h-40 flex items-end gap-2 px-2 ${
@@ -942,7 +959,7 @@ export default function App() {
           >
             {chartData.map((d, i) => {
               const maxVal = Math.max(...chartData.map((d) => d.value), 1000);
-              const height = `${Math.max((d.value / maxVal) * 100, 2)}%`; // 最低でも少し表示
+              const height = `${Math.max((d.value / maxVal) * 100, 2)}%`;
               return (
                 <div
                   key={i}
@@ -952,7 +969,6 @@ export default function App() {
                     className="w-full bg-orange-100 rounded-t-md relative hover:bg-orange-200 transition-all group"
                     style={{ height }}
                   >
-                    {/* ツールチップ的な金額表示 */}
                     <div className="absolute -top-6 left-1/2 -translate-x-1/2 text-[9px] bg-stone-800 text-white px-1 rounded opacity-0 group-hover:opacity-100 whitespace-nowrap z-10">
                       ¥{d.value.toLocaleString()}
                     </div>
@@ -966,11 +982,9 @@ export default function App() {
           </div>
         </div>
       </Card>
-
-      {/* 人気メニューランキング */}
       <Card className="p-4">
         <h3 className="font-bold text-stone-600 mb-4 flex items-center gap-2 text-sm">
-          <Coffee size={16} /> 人気メニュー TOP5 (全期間)
+          <Coffee size={16} /> 人気メニュー TOP5 ({currentMonth})
         </h3>
         <div className="space-y-3">
           {aggregated.menuRanking.map(([name, count], i) => (
@@ -1035,7 +1049,6 @@ export default function App() {
           </div>
         </div>
       </div>
-
       <Card className="p-6">
         <h2 className="text-xl font-bold text-stone-700 mb-6 flex items-center gap-2">
           <RefreshCw className="text-orange-600" /> 資金の移動を記録
@@ -1113,7 +1126,6 @@ export default function App() {
           </Button>
         </form>
       </Card>
-
       <div className="space-y-3">
         <h3 className="font-bold text-stone-500 text-sm pl-2">資金移動履歴</h3>
         {funds.length === 0 ? (
@@ -1422,9 +1434,27 @@ export default function App() {
         </button>
       </div>
 
+      <div className="flex items-center justify-between bg-white p-3 rounded-xl border border-stone-200 mb-4 shadow-sm">
+        <button
+          onClick={() => changeMonth(-1)}
+          className="p-2 text-stone-400 hover:text-orange-600"
+        >
+          <ChevronLeft />
+        </button>
+        <span className="font-bold text-lg text-stone-700">
+          {currentMonth.split("-")[0]}年 {currentMonth.split("-")[1]}月
+        </span>
+        <button
+          onClick={() => changeMonth(1)}
+          className="p-2 text-stone-400 hover:text-orange-600"
+        >
+          <ChevronRight />
+        </button>
+      </div>
+
       <div className="bg-gradient-to-br from-orange-50 to-amber-50 border border-orange-100 rounded-xl p-4 shadow-sm">
         <h3 className="font-bold text-orange-800 mb-3 flex items-center gap-2 text-sm border-b border-orange-200 pb-2">
-          <Wallet size={18} /> 今月の給料計算 (表示中の全期間)
+          <Wallet size={18} /> {currentMonth} の給料計算
         </h3>
         <div className="grid grid-cols-2 gap-4 mb-3">
           <div className="bg-white p-3 rounded-lg border border-orange-100">
@@ -1454,9 +1484,7 @@ export default function App() {
         <div className="bg-white p-3 rounded-lg border-l-4 border-stone-400 mb-3 shadow-sm flex items-center justify-between">
           <div className="flex items-center gap-2 text-stone-600">
             <Landmark size={18} />
-            <span className="text-xs font-bold">
-              年度末の納税予定額 (消費税)
-            </span>
+            <span className="text-xs font-bold">今月の納税積立 (消費税)</span>
           </div>
           <span className="font-mono font-bold text-lg text-stone-700">
             ¥{aggregated.summary.totalTax.toLocaleString()}
@@ -1510,22 +1538,36 @@ export default function App() {
             )}
           </div>
 
-          <div className="border-t border-dashed border-stone-200 pt-2 flex justify-between items-center text-sm">
-            <span className="flex items-center gap-1 text-stone-500">
-              <PiggyBank size={14} /> ランタナ貯金 (端数+調整分)
-            </span>
-            <div className="flex items-center gap-2">
+          <div className="border-t border-dashed border-stone-200 pt-2 text-sm">
+            <div className="flex justify-between items-center mb-1">
+              <span className="flex items-center gap-1 text-stone-500">
+                <PiggyBank size={14} /> ランタナ貯金 (端数+調整分)
+              </span>
               <span className="font-mono font-bold text-stone-700">
                 ¥{aggregated.summary.lantanaSavings.toLocaleString()}
               </span>
+            </div>
+            <div className="flex justify-end gap-2 items-center">
+              <span className="text-xs text-stone-400">
+                移動済み: ¥
+                {aggregated.summary.transferredAmount.toLocaleString()}
+              </span>
               <button
                 onClick={() =>
-                  transferSavingsToFunds(aggregated.summary.lantanaSavings)
+                  transferSavingsToFunds(
+                    aggregated.summary.remainingLantanaSavings
+                  )
                 }
-                className="bg-green-100 text-green-700 px-2 py-1 rounded text-xs font-bold hover:bg-green-200 flex items-center gap-1"
-                disabled={aggregated.summary.lantanaSavings <= 0}
+                className={`px-3 py-1 rounded-full text-xs font-bold flex items-center gap-1 transition-colors ${
+                  aggregated.summary.remainingLantanaSavings > 0
+                    ? "bg-green-500 text-white hover:bg-green-600 shadow-md"
+                    : "bg-stone-100 text-stone-400 cursor-not-allowed"
+                }`}
+                disabled={aggregated.summary.remainingLantanaSavings <= 0}
               >
-                <ArrowRightCircle size={12} /> 資金へ移動
+                <ArrowRightCircle size={12} /> 未移動分 ¥
+                {aggregated.summary.remainingLantanaSavings.toLocaleString()}{" "}
+                を資金へ
               </button>
             </div>
           </div>
@@ -1575,7 +1617,7 @@ export default function App() {
                         ) : (
                           <ChevronDown size={14} />
                         )}
-                        {row.date.slice(5)}
+                        {row.date.slice(8)}日
                       </td>
                       <td className="p-3 text-right font-mono font-bold">
                         ¥{row.sales.toLocaleString()}
@@ -1738,7 +1780,6 @@ export default function App() {
         </div>
       </div>
 
-      {/* Delete Confirmation Modal */}
       {deleteModal && (
         <div className="fixed inset-0 bg-black/60 z-50 flex items-center justify-center p-4 animate-in fade-in duration-200">
           <div className="bg-white rounded-2xl w-full max-w-sm p-6 text-center space-y-4 shadow-xl">
@@ -2011,228 +2052,6 @@ export default function App() {
     </div>
   );
 
-  const renderMenuSettings = () => (
-    <div className="max-w-2xl mx-auto space-y-6 pb-20">
-      <div className="flex justify-between items-center mb-4">
-        <h2 className="text-xl font-bold text-stone-700 flex items-center gap-2">
-          <Settings className="text-orange-600" /> メニュー管理
-        </h2>
-        <Button onClick={() => setEditingMenu({})} className="text-sm">
-          <PlusCircle size={16} /> 新規追加
-        </Button>
-      </div>
-      <div className="space-y-3">
-        {menuItems.map((item) => (
-          <div
-            key={item.id}
-            className="bg-white p-4 rounded-xl border border-stone-200 flex justify-between items-center"
-          >
-            <div className="flex items-center gap-3">
-              <div
-                className={`w-12 h-12 rounded-lg ${item.imageColor} flex items-center justify-center text-stone-500`}
-              >
-                {item.type === "food" && <Utensils size={20} />}{" "}
-                {item.type === "drink" && <Coffee size={20} />}{" "}
-                {item.type === "dessert" && <ChefHat size={20} />}
-              </div>
-              <div>
-                <div className="font-bold text-stone-800">{item.name}</div>
-                <div className="text-xs text-stone-500">
-                  ¥{item.basePrice.toLocaleString()}{" "}
-                  {item.hasSets &&
-                    item.type === "food" &&
-                    `(A:¥${getPrice(item, "setA")}/B:¥${getPrice(
-                      item,
-                      "setB"
-                    )})`}
-                </div>
-              </div>
-            </div>
-            <div className="flex gap-2">
-              <button
-                onClick={() => setEditingMenu(item)}
-                className="p-2 text-stone-400 hover:text-orange-600 hover:bg-orange-50 rounded-lg"
-              >
-                <Edit2 size={18} />
-              </button>
-              <button
-                onClick={() => deleteMenuItem(item.id)}
-                className="p-2 text-stone-400 hover:text-red-600 hover:bg-red-50 rounded-lg"
-              >
-                <Trash2 size={18} />
-              </button>
-            </div>
-          </div>
-        ))}
-      </div>
-      {editingMenu && (
-        <div className="fixed inset-0 bg-black/60 z-50 flex items-center justify-center p-4">
-          <div className="bg-white rounded-2xl w-full max-w-md overflow-hidden shadow-xl animate-in fade-in zoom-in duration-200 h-[90vh] flex flex-col">
-            <div className="p-4 border-b flex justify-between items-center shrink-0">
-              <h3 className="font-bold text-lg">
-                {editingMenu.id ? "メニュー編集" : "新規メニュー追加"}
-              </h3>
-              <button
-                onClick={() => setEditingMenu(null)}
-                className="p-1 hover:bg-stone-100 rounded-full"
-              >
-                <X size={20} />
-              </button>
-            </div>
-            <form
-              onSubmit={saveMenuItem}
-              className="p-6 space-y-4 overflow-y-auto flex-1"
-            >
-              <input
-                type="hidden"
-                name="imageColor"
-                value={editingMenu.imageColor || ""}
-              />
-              <div>
-                <label className="block text-xs font-bold text-stone-500 mb-1">
-                  メニュー名
-                </label>
-                <input
-                  name="name"
-                  defaultValue={editingMenu.name}
-                  required
-                  className="w-full p-2 border rounded-lg"
-                  placeholder="例：季節のパスタ"
-                />
-              </div>
-              <div className="grid grid-cols-2 gap-4">
-                <div>
-                  <label className="block text-xs font-bold text-stone-500 mb-1">
-                    単品価格 (円)
-                  </label>
-                  <input
-                    name="basePrice"
-                    type="number"
-                    defaultValue={editingMenu.basePrice}
-                    required
-                    className="w-full p-2 border rounded-lg"
-                    placeholder="1000"
-                  />
-                </div>
-                <div>
-                  <label className="block text-xs font-bold text-stone-500 mb-1">
-                    種類
-                  </label>
-                  <select
-                    name="type"
-                    defaultValue={editingMenu.type || "food"}
-                    className="w-full p-2 border rounded-lg bg-white"
-                    onChange={(e) =>
-                      setEditingMenu({ ...editingMenu, type: e.target.value })
-                    }
-                  >
-                    <option value="food">食事</option>
-                    <option value="drink">ドリンク</option>
-                    <option value="dessert">デザート</option>
-                  </select>
-                </div>
-              </div>
-              <div className="space-y-4 pt-2 border-t border-stone-100">
-                <label className="flex items-center gap-2 text-sm text-stone-700 cursor-pointer font-bold">
-                  <input
-                    type="checkbox"
-                    name="hasSets"
-                    defaultChecked={editingMenu.hasSets}
-                    className="w-4 h-4 text-orange-600 rounded"
-                    onChange={(e) =>
-                      setEditingMenu({
-                        ...editingMenu,
-                        hasSets: e.target.checked,
-                      })
-                    }
-                  />
-                  セット販売を有効にする
-                </label>
-                {(editingMenu.hasSets || !editingMenu.id) &&
-                  (editingMenu.type === "food" || !editingMenu.type) && (
-                    <div className="pl-6 space-y-3 bg-stone-50 p-3 rounded-lg">
-                      <div>
-                        <label className="block text-xs font-bold text-orange-600 mb-1">
-                          Aセット価格 (ドリンク付)
-                        </label>
-                        <input
-                          name="priceSetA"
-                          type="number"
-                          defaultValue={editingMenu.priceSetA}
-                          placeholder={`自動計算: ¥${
-                            (editingMenu.basePrice || 0) + 300
-                          }`}
-                          className="w-full p-2 border border-orange-200 rounded-lg bg-white"
-                        />
-                        <p className="text-[10px] text-stone-400 mt-1">
-                          ※空欄の場合は自動で +300円 になります
-                        </p>
-                      </div>
-                      <div>
-                        <label className="block text-xs font-bold text-orange-600 mb-1">
-                          Bセット価格 (ドリンク・デザート付)
-                        </label>
-                        <input
-                          name="priceSetB"
-                          type="number"
-                          defaultValue={editingMenu.priceSetB}
-                          placeholder={`自動計算: ¥${
-                            (editingMenu.basePrice || 0) + 700
-                          }`}
-                          className="w-full p-2 border border-orange-200 rounded-lg bg-white"
-                        />
-                        <p className="text-[10px] text-stone-400 mt-1">
-                          ※空欄の場合は自動で +700円 になります
-                        </p>
-                      </div>
-                    </div>
-                  )}
-                {(editingMenu.hasSets || !editingMenu.id) &&
-                  editingMenu.type === "dessert" && (
-                    <div className="pl-6 bg-pink-50 p-3 rounded-lg">
-                      <label className="block text-xs font-bold text-pink-600 mb-1">
-                        デザートセット価格 (ドリンク付)
-                      </label>
-                      <input
-                        name="priceDessertSet"
-                        type="number"
-                        defaultValue={editingMenu.priceDessertSet}
-                        placeholder={`自動計算: ¥${
-                          (editingMenu.basePrice || 0) + 300
-                        }`}
-                        className="w-full p-2 border border-pink-200 rounded-lg bg-white"
-                      />
-                    </div>
-                  )}
-                <label className="flex items-center gap-2 text-sm text-stone-700 cursor-pointer pt-2">
-                  <input
-                    type="checkbox"
-                    name="canTakeout"
-                    defaultChecked={editingMenu.canTakeout}
-                    className="w-4 h-4 text-orange-600 rounded"
-                  />
-                  テイクアウト可能にする
-                </label>
-              </div>
-              <div className="pt-4 flex gap-3 shrink-0">
-                <Button
-                  variant="secondary"
-                  className="flex-1"
-                  onClick={() => setEditingMenu(null)}
-                >
-                  キャンセル
-                </Button>
-                <Button type="submit" className="flex-1">
-                  保存する
-                </Button>
-              </div>
-            </form>
-          </div>
-        </div>
-      )}
-    </div>
-  );
-
   if (authError)
     return (
       <div className="h-screen flex items-center justify-center bg-red-50 text-red-600 p-8 text-center">
@@ -2363,7 +2182,7 @@ export default function App() {
             </div>
             <div>
               <h3 className="text-lg font-bold text-stone-800">
-                削除しますか？
+                本当に削除しますか？
               </h3>
               <p className="text-sm text-stone-500 mt-2 whitespace-pre-wrap">
                 {deleteModal.message}
