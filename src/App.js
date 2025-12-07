@@ -12,7 +12,7 @@ import {
   addDoc,
   query,
   where,
-  orderBy, // Keep import for now, but we might not use it in queries to avoid index errors
+  orderBy,
   onSnapshot,
   serverTimestamp,
   deleteDoc,
@@ -53,6 +53,7 @@ import {
   ArrowUpCircle,
   ArrowDownCircle,
   MinusCircle,
+  ArrowRightCircle,
 } from "lucide-react";
 
 // --- Firebase Initialization ---
@@ -303,9 +304,6 @@ export default function App() {
       }
     };
 
-    // Remove complex orderBy to prevent "Index required" errors in new environments
-    // We will sort in Javascript instead.
-
     const qMenu = query(
       collection(db, "artifacts", appId, "public", "data", "menu_items")
     );
@@ -339,7 +337,6 @@ export default function App() {
               INITIAL_MENU_ITEMS.map((m, i) => ({ id: `init-${i}`, ...m }))
             );
         } else {
-          // Sort in memory
           const items = snapshot.docs.map((doc) => ({
             id: doc.id,
             ...doc.data(),
@@ -414,7 +411,6 @@ export default function App() {
           ...doc.data(),
         }));
         data.sort((a, b) => {
-          // Sort by date desc, then by createdAt desc
           const dateDiff = b.date.localeCompare(a.date);
           if (dateDiff !== 0) return dateDiff;
           return (b.createdAt?.seconds || 0) - (a.createdAt?.seconds || 0);
@@ -441,10 +437,37 @@ export default function App() {
         await deleteDoc(
           doc(db, "artifacts", appId, "public", "data", collectionName, id)
         );
-        // alert("削除しました"); // UI更新が速いのでアラートは省略
       } catch (err) {
         alert("削除に失敗しました: " + err.message);
       }
+    }
+  };
+
+  // --- Logic: Transfer Savings to Funds ---
+  const transferSavingsToFunds = async (amount) => {
+    if (amount <= 0) return;
+    if (
+      !window.confirm(
+        `端数貯金 ¥${amount.toLocaleString()} を\n「資金（ランタナ預かり金）」に移動しますか？`
+      )
+    )
+      return;
+
+    try {
+      await addDoc(
+        collection(db, "artifacts", appId, "public", "data", "funds"),
+        {
+          date: new Date().toISOString().split("T")[0],
+          amount: amount,
+          type: "入金",
+          note: "帳簿より端数貯金繰入",
+          createdAt: serverTimestamp(),
+        }
+      );
+      alert("資金に移動しました！\n「資金」タブで確認できます。");
+    } catch (err) {
+      console.error(err);
+      alert("移動に失敗しました");
     }
   };
 
@@ -553,7 +576,7 @@ export default function App() {
     }
   };
 
-  // --- Logic: Expenses & Reports & Funds ---
+  // --- Logic: Expenses ---
   const [expenseForm, setExpenseForm] = useState({
     date: new Date().toISOString().split("T")[0],
     item: "",
@@ -579,6 +602,7 @@ export default function App() {
     }
   };
 
+  // --- Logic: Reports ---
   const [reportForm, setReportForm] = useState({
     date: new Date().toISOString().split("T")[0],
     weather: "晴れ",
@@ -604,6 +628,7 @@ export default function App() {
     }
   };
 
+  // --- Logic: Funds ---
   const [fundForm, setFundForm] = useState({
     date: new Date().toISOString().split("T")[0],
     amount: "",
@@ -615,6 +640,7 @@ export default function App() {
     if (!user || !fundForm.amount) return;
     const isIncome = fundForm.type === "入金" || fundForm.type === "初期残高";
     const amountVal = Number(fundForm.amount);
+
     try {
       await addDoc(
         collection(db, "artifacts", appId, "public", "data", "funds"),
@@ -657,6 +683,7 @@ export default function App() {
       totalSalesAll += order.total;
       dataByDate[d].orderCount += 1;
       dataByDate[d].rawOrders.push(order);
+
       if (order.items)
         order.items.forEach((item) => {
           const key =
@@ -689,9 +716,11 @@ export default function App() {
           expenseDetails: [],
           rawOrders: [],
         };
+
       dataByDate[d].expenses += exp.amount;
       totalExpensesAll += exp.amount;
       dataByDate[d].expenseDetails.push(exp);
+
       if (exp.payer === "高橋") dataByDate[d].takahashiPay += exp.amount;
       if (exp.payer === "浜田") dataByDate[d].hamadaPay += exp.amount;
       if (exp.payer === "ランタナ") dataByDate[d].lantanaPay += exp.amount;
@@ -705,14 +734,10 @@ export default function App() {
     const profit = totalSalesAll - totalExpensesAll;
     const baseProfit = profit > 0 ? profit : 0;
 
-    // 給料計算ロジック修正：端数（1000円未満）は切り捨ててランタナへ
+    // 給料計算ロジック
     const defaultSalaryPerPerson = Math.floor(baseProfit / 2 / 1000) * 1000;
-
-    // 手動調整がある場合はそちらを優先
     const finalSalaryPerPerson =
       manualSalary !== null ? manualSalary : defaultSalaryPerPerson;
-
-    // ランタナ貯金（端数＋調整分） = 利益 - (支払った給料合計)
     const lantanaSavings = profit - finalSalaryPerPerson * 2;
 
     // 資金残高の計算
@@ -729,7 +754,7 @@ export default function App() {
         totalExpenses: totalExpensesAll,
         profit,
         salaryPerPerson: finalSalaryPerPerson,
-        defaultSalaryPerPerson, // スライダーのMAX値用
+        defaultSalaryPerPerson,
         lantanaSavings,
       },
       fundBalance: currentFundBalance,
@@ -1209,9 +1234,20 @@ export default function App() {
             <span className="flex items-center gap-1 text-stone-500">
               <PiggyBank size={14} /> ランタナ貯金 (端数+調整分)
             </span>
-            <span className="font-mono font-bold text-stone-700">
-              ¥{aggregated.summary.lantanaSavings.toLocaleString()}
-            </span>
+            <div className="flex items-center gap-2">
+              <span className="font-mono font-bold text-stone-700">
+                ¥{aggregated.summary.lantanaSavings.toLocaleString()}
+              </span>
+              <button
+                onClick={() =>
+                  transferSavingsToFunds(aggregated.summary.lantanaSavings)
+                }
+                className="bg-green-100 text-green-700 px-2 py-1 rounded text-xs font-bold hover:bg-green-200 flex items-center gap-1"
+                disabled={aggregated.summary.lantanaSavings <= 0}
+              >
+                <ArrowRightCircle size={12} /> 資金へ移動
+              </button>
+            </div>
           </div>
         </div>
       </div>
