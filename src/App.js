@@ -54,6 +54,8 @@ import {
   ArrowDownCircle,
   MinusCircle,
   ArrowRightCircle,
+  Calculator,
+  Coins,
 } from "lucide-react";
 
 // --- Firebase Initialization ---
@@ -238,13 +240,24 @@ export default function App() {
   const [loadingStatus, setLoadingStatus] = useState("起動中...");
   const [showRetry, setShowRetry] = useState(false);
 
-  // 給料手動調整用のステート
   const [manualSalary, setManualSalary] = useState(null);
+  const [deleteModal, setDeleteModal] = useState(null);
 
   useEffect(() => {
     const script = document.createElement("script");
     script.src = "https://cdn.tailwindcss.com";
     document.head.appendChild(script);
+
+    // アプリアイコン設定
+    const iconUrl =
+      "data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Crect width='100' height='100' rx='20' fill='%23ea580c'/%3E%3Ctext x='50' y='70' font-size='50' text-anchor='middle' fill='white'%3E☕️%3C/text%3E%3C/svg%3E";
+    let link = document.querySelector("link[rel~='icon']");
+    if (!link) {
+      link = document.createElement("link");
+      link.rel = "icon";
+      document.head.appendChild(link);
+    }
+    link.href = iconUrl;
 
     const timer = setTimeout(() => setShowRetry(true), 10000);
     return () => clearTimeout(timer);
@@ -429,16 +442,28 @@ export default function App() {
   }, [user]);
 
   // --- Logic Helpers ---
-  const deleteDocWrapper = async (e, collectionName, id, confirmMsg) => {
+  const confirmDelete = (e, collectionName, id, message) => {
     e.stopPropagation();
-    if (window.confirm(confirmMsg)) {
-      try {
-        await deleteDoc(
-          doc(db, "artifacts", appId, "public", "data", collectionName, id)
-        );
-      } catch (err) {
-        alert("削除に失敗しました: " + err.message);
-      }
+    setDeleteModal({ collection: collectionName, id: id, message: message });
+  };
+
+  const executeDelete = async () => {
+    if (!deleteModal) return;
+    try {
+      await deleteDoc(
+        doc(
+          db,
+          "artifacts",
+          appId,
+          "public",
+          "data",
+          deleteModal.collection,
+          deleteModal.id
+        )
+      );
+      setDeleteModal(null);
+    } catch (err) {
+      alert("削除に失敗しました: " + err.message);
     }
   };
 
@@ -469,7 +494,6 @@ export default function App() {
     }
   };
 
-  // --- Logic: Menu Management ---
   const saveMenuItem = async (e) => {
     e.preventDefault();
     const formData = new FormData(e.target);
@@ -534,7 +558,6 @@ export default function App() {
     }
   };
 
-  // --- Logic: POS ---
   const addToCart = (item, setType = "single", isTakeout = false) => {
     const price = getPrice(item, setType);
     const newItem = {
@@ -574,7 +597,6 @@ export default function App() {
     }
   };
 
-  // --- Logic: Expenses ---
   const [expenseForm, setExpenseForm] = useState({
     date: new Date().toISOString().split("T")[0],
     item: "",
@@ -600,7 +622,6 @@ export default function App() {
     }
   };
 
-  // --- Logic: Reports ---
   const [reportForm, setReportForm] = useState({
     date: new Date().toISOString().split("T")[0],
     weather: "晴れ",
@@ -626,7 +647,6 @@ export default function App() {
     }
   };
 
-  // --- Logic: Funds ---
   const [fundForm, setFundForm] = useState({
     date: new Date().toISOString().split("T")[0],
     amount: "",
@@ -655,7 +675,6 @@ export default function App() {
     }
   };
 
-  // --- Logic: Aggregation ---
   const getAggregatedData = () => {
     const dataByDate = {};
     let totalSalesAll = 0;
@@ -738,6 +757,10 @@ export default function App() {
       .reduce((sum, e) => sum + e.amount, 0);
     const currentFundBalance = totalFundsAdded - totalLantanaExpenses;
 
+    // 税金計算（内税10%）
+    const totalTax = totalSalesAll - Math.round(totalSalesAll / 1.1);
+    const totalNetSales = totalSalesAll - totalTax;
+
     return {
       daily: sortedData,
       summary: {
@@ -747,6 +770,8 @@ export default function App() {
         salaryPerPerson: finalSalaryPerPerson,
         defaultSalaryPerPerson,
         lantanaSavings,
+        totalTax,
+        totalNetSales,
       },
       fundBalance: currentFundBalance,
     };
@@ -757,8 +782,6 @@ export default function App() {
     [orders, expenses, funds, manualSalary]
   );
 
-  // --- Render Functions (Defined BEFORE return) ---
-
   const renderFunds = () => (
     <div className="max-w-2xl mx-auto space-y-6 pb-20">
       <div className="bg-gradient-to-br from-green-50 to-emerald-50 border border-green-100 rounded-xl p-6 text-center shadow-sm">
@@ -768,9 +791,23 @@ export default function App() {
         <div className="text-4xl font-mono font-bold text-green-700">
           ¥{aggregated.fundBalance.toLocaleString()}
         </div>
-        <p className="text-xs text-stone-400 mt-2">
-          (入出金合計 - ランタナ経費払)
-        </p>
+        <div className="mt-4 pt-3 border-t border-green-200 text-xs text-stone-500">
+          <div className="flex justify-between items-center mb-1">
+            <span>うち 納税予定額 (消費税)</span>
+            <span className="font-bold text-red-500">
+              ¥{aggregated.summary.totalTax.toLocaleString()}
+            </span>
+          </div>
+          <div className="flex justify-between items-center">
+            <span>実質残高 (納税後)</span>
+            <span className="font-bold text-stone-700">
+              ¥
+              {(
+                aggregated.fundBalance - aggregated.summary.totalTax
+              ).toLocaleString()}
+            </span>
+          </div>
+        </div>
       </div>
 
       <Card className="p-6">
@@ -886,16 +923,11 @@ export default function App() {
                 </span>
                 <button
                   onClick={(e) =>
-                    deleteDocWrapper(
-                      e,
-                      "funds",
-                      f.id,
-                      "この記録を削除しますか？"
-                    )
+                    confirmDelete(e, "funds", f.id, "この記録を削除しますか？")
                   }
-                  className="text-stone-400 hover:text-red-600 p-1"
+                  className="p-2 bg-stone-100 rounded-lg text-stone-500 hover:text-red-600"
                 >
-                  <Trash2 size={14} />
+                  <Trash2 size={16} />
                 </button>
               </div>
             </div>
@@ -1128,14 +1160,14 @@ export default function App() {
                 </div>
                 <button
                   onClick={(e) =>
-                    deleteDocWrapper(
+                    confirmDelete(
                       e,
                       "reports",
                       report.id,
                       "この日報を削除しますか？"
                     )
                   }
-                  className="text-stone-400 hover:text-red-500"
+                  className="p-2 bg-stone-100 rounded-lg text-stone-500 hover:text-red-600"
                 >
                   <Trash2 size={16} />
                 </button>
@@ -1161,10 +1193,23 @@ export default function App() {
         </h3>
         <div className="grid grid-cols-2 gap-4 mb-3">
           <div className="bg-white p-3 rounded-lg border border-orange-100">
-            <p className="text-xs text-stone-500 mb-1">売上合計</p>
+            <p className="text-xs text-stone-500 mb-1">売上合計 (税込)</p>
             <p className="font-mono font-bold text-lg">
               ¥{aggregated.summary.totalSales.toLocaleString()}
             </p>
+            {/* 消費税の内訳表示 */}
+            <div className="text-xs text-stone-400 mt-1 border-t border-stone-100 pt-1">
+              <div className="flex justify-between">
+                <span>本体</span>
+                <span>
+                  ¥{aggregated.summary.totalNetSales.toLocaleString()}
+                </span>
+              </div>
+              <div className="flex justify-between">
+                <span>税(10%)</span>
+                <span>¥{aggregated.summary.totalTax.toLocaleString()}</span>
+              </div>
+            </div>
           </div>
           <div className="bg-white p-3 rounded-lg border border-orange-100">
             <p className="text-xs text-stone-500 mb-1">経費合計</p>
@@ -1173,6 +1218,20 @@ export default function App() {
             </p>
           </div>
         </div>
+
+        {/* 納税積立パネル (新設) */}
+        <div className="bg-white p-3 rounded-lg border-l-4 border-stone-400 mb-3 shadow-sm flex items-center justify-between">
+          <div className="flex items-center gap-2 text-stone-600">
+            <Landmark size={18} />
+            <span className="text-xs font-bold">
+              年度末の納税予定額 (消費税)
+            </span>
+          </div>
+          <span className="font-mono font-bold text-lg text-stone-700">
+            ¥{aggregated.summary.totalTax.toLocaleString()}
+          </span>
+        </div>
+
         <div className="bg-white p-4 rounded-xl border-2 border-orange-200 shadow-sm relative overflow-hidden">
           <div className="absolute top-0 right-0 bg-orange-100 text-orange-700 text-[10px] font-bold px-2 py-1 rounded-bl-lg">
             利益÷2 (1000円未満切捨)
@@ -1266,6 +1325,9 @@ export default function App() {
             <tbody className="divide-y divide-stone-100">
               {aggregated.daily.map((row) => {
                 const profit = row.sales - row.expenses;
+                // 日ごとの税計算
+                const dailyTax = row.sales - Math.round(row.sales / 1.1);
+
                 const isExpanded = expandedDate === row.date;
                 return (
                   <React.Fragment key={row.date}>
@@ -1315,6 +1377,7 @@ export default function App() {
                       <tr className="bg-stone-50">
                         <td colSpan={6} className="p-4">
                           <div className="bg-white rounded-lg border border-stone-200 p-4 space-y-6">
+                            {/* Detailed Expenses with Delete */}
                             <div>
                               <h4 className="font-bold text-stone-700 mb-2 flex items-center gap-2 text-sm border-b pb-1">
                                 <DollarSign
@@ -1354,16 +1417,16 @@ export default function App() {
                                         </span>
                                         <button
                                           onClick={(e) =>
-                                            deleteDocWrapper(
+                                            confirmDelete(
                                               e,
                                               "expenses",
                                               exp.id,
                                               "この経費記録を削除しますか？"
                                             )
                                           }
-                                          className="text-stone-400 hover:text-red-600 p-1 rounded-full hover:bg-red-50"
+                                          className="text-stone-400 hover:text-red-600 p-2 rounded-full hover:bg-red-50"
                                         >
-                                          <Trash2 size={14} />
+                                          <Trash2 size={16} />
                                         </button>
                                       </div>
                                     </div>
@@ -1371,13 +1434,20 @@ export default function App() {
                                 </div>
                               )}
                             </div>
+
+                            {/* Detailed Orders with Delete */}
                             <div>
-                              <h4 className="font-bold text-stone-700 mb-2 flex items-center gap-2 text-sm border-b pb-1">
-                                <Receipt
-                                  size={16}
-                                  className="text-orange-500"
-                                />{" "}
-                                売上明細・訂正
+                              <h4 className="font-bold text-stone-700 mb-2 flex items-center justify-between gap-2 text-sm border-b pb-1">
+                                <span className="flex items-center gap-2">
+                                  <Receipt
+                                    size={16}
+                                    className="text-orange-500"
+                                  />{" "}
+                                  売上明細・訂正
+                                </span>
+                                <span className="text-xs font-normal text-stone-400">
+                                  内税合計: ¥{dailyTax.toLocaleString()}
+                                </span>
                               </h4>
                               {row.rawOrders.length === 0 ? (
                                 <p className="text-stone-400 text-xs">なし</p>
@@ -1405,16 +1475,16 @@ export default function App() {
                                         </span>
                                         <button
                                           onClick={(e) =>
-                                            deleteDocWrapper(
+                                            confirmDelete(
                                               e,
                                               "orders",
                                               order.id,
                                               "この注文記録を削除しますか？\n売上から差し引かれます。"
                                             )
                                           }
-                                          className="text-stone-400 hover:text-red-600 p-1 rounded-full hover:bg-red-50"
+                                          className="text-stone-400 hover:text-red-600 p-2 rounded-full hover:bg-red-50"
                                         >
-                                          <Trash2 size={14} />
+                                          <Trash2 size={16} />
                                         </button>
                                       </div>
                                     </div>
@@ -1440,6 +1510,41 @@ export default function App() {
           </table>
         </div>
       </div>
+
+      {/* Delete Confirmation Modal */}
+      {deleteModal && (
+        <div className="fixed inset-0 bg-black/60 z-50 flex items-center justify-center p-4 animate-in fade-in duration-200">
+          <div className="bg-white rounded-2xl w-full max-w-sm p-6 text-center space-y-4 shadow-xl">
+            <div className="w-12 h-12 bg-red-100 rounded-full flex items-center justify-center mx-auto text-red-500">
+              <Trash2 size={24} />
+            </div>
+            <div>
+              <h3 className="text-lg font-bold text-stone-800">
+                削除しますか？
+              </h3>
+              <p className="text-sm text-stone-500 mt-2 whitespace-pre-wrap">
+                {deleteModal.message}
+              </p>
+            </div>
+            <div className="flex gap-3 pt-2">
+              <Button
+                variant="secondary"
+                className="flex-1"
+                onClick={() => setDeleteModal(null)}
+              >
+                キャンセル
+              </Button>
+              <Button
+                variant="danger"
+                className="flex-1"
+                onClick={executeDelete}
+              >
+                削除する
+              </Button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 
@@ -2018,6 +2123,41 @@ export default function App() {
           {activeTab === "menu" && renderMenuSettings()}
         </div>
       </main>
+
+      {/* 削除確認モーダル（画面の真ん中にフワッと出るやつ） */}
+      {deleteModal && (
+        <div className="fixed inset-0 bg-black/60 z-50 flex items-center justify-center p-4 animate-in fade-in duration-200">
+          <div className="bg-white rounded-2xl w-full max-w-sm p-6 text-center space-y-4 shadow-xl">
+            <div className="w-12 h-12 bg-red-100 rounded-full flex items-center justify-center mx-auto text-red-500">
+              <Trash2 size={24} />
+            </div>
+            <div>
+              <h3 className="text-lg font-bold text-stone-800">
+                削除しますか？
+              </h3>
+              <p className="text-sm text-stone-500 mt-2 whitespace-pre-wrap">
+                {deleteModal.message}
+              </p>
+            </div>
+            <div className="flex gap-3 pt-2">
+              <Button
+                variant="secondary"
+                className="flex-1"
+                onClick={() => setDeleteModal(null)}
+              >
+                キャンセル
+              </Button>
+              <Button
+                variant="danger"
+                className="flex-1"
+                onClick={executeDelete}
+              >
+                削除する
+              </Button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
