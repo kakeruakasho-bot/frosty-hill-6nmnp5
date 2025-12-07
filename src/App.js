@@ -12,6 +12,7 @@ import {
   addDoc,
   query,
   where,
+  orderBy,
   onSnapshot,
   serverTimestamp,
   deleteDoc,
@@ -230,6 +231,7 @@ const Button = ({
   );
 };
 
+// --- Month Navigator Component ---
 const MonthNavigator = ({ currentMonth, onChange }) => (
   <div className="flex items-center justify-between bg-orange-50 p-2 rounded-xl border border-orange-200 mb-4 shadow-sm">
     <button
@@ -276,6 +278,7 @@ export default function App() {
     script.src = "https://cdn.tailwindcss.com";
     document.head.appendChild(script);
 
+    // アプリアイコン設定
     const iconUrl =
       "data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Crect width='100' height='100' rx='20' fill='%23ea580c'/%3E%3Ctext x='50' y='70' font-size='50' text-anchor='middle' fill='white'%3E☕️%3C/text%3E%3C/svg%3E";
     let link = document.querySelector("link[rel~='icon']");
@@ -309,6 +312,7 @@ export default function App() {
     return item.basePrice;
   };
 
+  // --- Auth & Data Fetching ---
   useEffect(() => {
     const initAuth = async () => {
       try {
@@ -1666,6 +1670,7 @@ export default function App() {
                       <tr className="bg-stone-50">
                         <td colSpan={6} className="p-4">
                           <div className="bg-white rounded-lg border border-stone-200 p-4 space-y-6">
+                            {/* Detailed Expenses with Delete */}
                             <div>
                               <h4 className="font-bold text-stone-700 mb-2 flex items-center gap-2 text-sm border-b pb-1">
                                 <DollarSign
@@ -1722,6 +1727,8 @@ export default function App() {
                                 </div>
                               )}
                             </div>
+
+                            {/* Detailed Orders with Delete */}
                             <div>
                               <h4 className="font-bold text-stone-700 mb-2 flex items-center justify-between gap-2 text-sm border-b pb-1">
                                 <span className="flex items-center gap-2">
@@ -1797,6 +1804,7 @@ export default function App() {
         </div>
       </div>
 
+      {/* Delete Confirmation Modal */}
       {deleteModal && (
         <div className="fixed inset-0 bg-black/60 z-50 flex items-center justify-center p-4 animate-in fade-in duration-200">
           <div className="bg-white rounded-2xl w-full max-w-sm p-6 text-center space-y-4 shadow-xl">
