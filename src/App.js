@@ -12,6 +12,7 @@ import {
   addDoc,
   query,
   where,
+  orderBy, // インポートは残しますが、クエリでは使いません
   onSnapshot,
   serverTimestamp,
   deleteDoc,
@@ -63,7 +64,8 @@ import {
 // --- Firebase Initialization ---
 
 let firebaseConfig;
-let appId = "lantana_store_v1";
+// ★ここを変更：バージョンを上げてデータをリフレッシュします（大盛り設定を反映させるため）
+let appId = "lantana_store_v2";
 let isGeminiEnv = false;
 
 try {
@@ -286,9 +288,8 @@ export default function App() {
     new Date().toISOString().slice(0, 7)
   );
 
-  // オプション選択用ステート（POS）
+  // オプション選択用ステート
   const [selectedOptions, setSelectedOptions] = useState([]);
-  // メニュー編集用の一時的なオプションリスト
   const [editingOptions, setEditingOptions] = useState([]);
 
   useEffect(() => {
@@ -320,6 +321,15 @@ export default function App() {
   const [selectedItem, setSelectedItem] = useState(null);
   const [isCheckoutModalOpen, setIsCheckoutModalOpen] = useState(false);
   const [editingMenu, setEditingMenu] = useState(null);
+
+  // Set initial editing options when opening menu editor
+  useEffect(() => {
+    if (editingMenu && editingMenu.options) {
+      setEditingOptions(editingMenu.options);
+    } else {
+      setEditingOptions([]);
+    }
+  }, [editingMenu]);
 
   const getPrice = (item, setType) => {
     if (setType === "single") return item.basePrice;
@@ -364,6 +374,7 @@ export default function App() {
       }
     };
 
+    // 並び替えはクライアント側で行うため、クエリからはorderByを削除
     const qMenu = query(
       collection(db, "artifacts", appId, "public", "data", "menu_items")
     );
@@ -654,7 +665,6 @@ export default function App() {
     setSelectedItem(null);
     setSelectedOptions([]); // リセット
   };
-
   const removeFromCart = (tempId) =>
     setCart(cart.filter((c) => c.tempId !== tempId));
   const calculateTotal = () => cart.reduce((sum, item) => sum + item.price, 0);
@@ -815,7 +825,6 @@ export default function App() {
           dataByDate[d].itemCounts[key].count += 1;
           dataByDate[d].itemCounts[key].amount += item.price;
 
-          // オプション料金込みの金額で税率計算
           if (item.isTakeout) {
             dataByDate[d].sales8 += item.price;
             totalTax8Sales += item.price;
@@ -875,10 +884,6 @@ export default function App() {
       manualSalary !== null ? manualSalary : defaultSalaryPerPerson;
 
     // ランタナ貯金（端数＋調整分＋税金分）
-    // 最終的に店に残るお金 = (税込利益) - (支払った給料)
-    // ※ここには納税用の資金も含まれますが、それは「資金」タブで管理します。
-    // ※表示上は「ランタナ貯金（端数）」としたい場合、税金を除いた残りとしても良いですが、
-    // 今回は「店に残るお金」として一括で扱います。
     const lantanaSavings = profitBeforeTax - finalSalaryPerPerson * 2;
 
     const transferredAmount = funds
@@ -1608,7 +1613,7 @@ export default function App() {
           <div className="border-t border-dashed border-stone-200 pt-2 text-sm">
             <div className="flex justify-between items-center mb-1">
               <span className="flex items-center gap-1 text-stone-500">
-                <PiggyBank size={14} /> ランタナ貯金 (端数+調整分)
+                <PiggyBank size={14} /> ランタナ貯金 (端数+調整分+税)
               </span>
               <span className="font-mono font-bold text-stone-700">
                 ¥{aggregated.summary.lantanaSavings.toLocaleString()}
@@ -1714,6 +1719,7 @@ export default function App() {
                       <tr className="bg-stone-50">
                         <td colSpan={6} className="p-4">
                           <div className="bg-white rounded-lg border border-stone-200 p-4 space-y-6">
+                            {/* Detailed Expenses with Delete */}
                             <div>
                               <h4 className="font-bold text-stone-700 mb-2 flex items-center gap-2 text-sm border-b pb-1">
                                 <DollarSign
@@ -1770,6 +1776,8 @@ export default function App() {
                                 </div>
                               )}
                             </div>
+
+                            {/* Detailed Orders with Delete */}
                             <div>
                               <h4 className="font-bold text-stone-700 mb-2 flex items-center justify-between gap-2 text-sm border-b pb-1">
                                 <span className="flex items-center gap-2">
@@ -1845,6 +1853,7 @@ export default function App() {
         </div>
       </div>
 
+      {/* Delete Confirmation Modal */}
       {deleteModal && (
         <div className="fixed inset-0 bg-black/60 z-50 flex items-center justify-center p-4 animate-in fade-in duration-200">
           <div className="bg-white rounded-2xl w-full max-w-sm p-6 text-center space-y-4 shadow-xl">
@@ -1959,7 +1968,6 @@ export default function App() {
                         <Home size={10} /> 店内
                       </span>
                     )}
-                    {/* オプション表示 */}
                     {item.options && item.options.length > 0 && (
                       <div className="flex flex-wrap gap-1 mt-1">
                         {item.options.map((opt, i) => (
