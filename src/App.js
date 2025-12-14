@@ -59,12 +59,12 @@ import {
   BarChart3,
   Download,
   Plus,
+  CheckCircle2,
 } from "lucide-react";
 
 // --- Firebase Initialization ---
 
 let firebaseConfig;
-// ★ここを変更：バージョンを上げてデータをリフレッシュします（大盛り設定を反映させるため）
 let appId = "lantana_store_v2";
 let isGeminiEnv = false;
 
@@ -297,7 +297,6 @@ export default function App() {
     script.src = "https://cdn.tailwindcss.com";
     document.head.appendChild(script);
 
-    // アプリアイコン設定
     const iconUrl =
       "data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Crect width='100' height='100' rx='20' fill='%23ea580c'/%3E%3Ctext x='50' y='70' font-size='50' text-anchor='middle' fill='white'%3E☕️%3C/text%3E%3C/svg%3E";
     let link = document.querySelector("link[rel~='icon']");
@@ -374,7 +373,6 @@ export default function App() {
       }
     };
 
-    // 並び替えはクライアント側で行うため、クエリからはorderByを削除
     const qMenu = query(
       collection(db, "artifacts", appId, "public", "data", "menu_items")
     );
@@ -530,7 +528,7 @@ export default function App() {
     if (amount <= 0) return;
     if (
       !window.confirm(
-        `端数貯金 ¥${amount.toLocaleString()} を\n「資金（ランタナ預かり金）」に移動しますか？`
+        `端数貯金・税金分 ¥${amount.toLocaleString()} を\n「資金（ランタナ預かり金）」に移動しますか？`
       )
     )
       return;
@@ -542,7 +540,7 @@ export default function App() {
           date: new Date().toISOString().split("T")[0],
           amount: amount,
           type: "入金",
-          note: `${currentMonth}分 帳簿より端数貯金繰入`,
+          note: `${currentMonth}分 帳簿より残金繰入`,
           createdAt: serverTimestamp(),
         }
       );
@@ -550,6 +548,55 @@ export default function App() {
     } catch (err) {
       console.error(err);
       alert("移動に失敗しました");
+    }
+  };
+
+  const recordSalaryAsExpense = async (salaryPerPerson) => {
+    if (salaryPerPerson <= 0) return;
+    if (
+      !window.confirm(
+        `高橋さん、浜田さんに\nそれぞれ ¥${salaryPerPerson.toLocaleString()} の給料を記録しますか？\n（経費として保存されます）`
+      )
+    )
+      return;
+
+    const today = new Date().toISOString().split("T")[0];
+    const monthLabel = currentMonth.split("-")[1];
+
+    try {
+      const batch = writeBatch(db);
+
+      // 高橋さんの給料
+      const docRef1 = doc(
+        collection(db, "artifacts", appId, "public", "data", "expenses")
+      );
+      batch.set(docRef1, {
+        date: today,
+        item: `${monthLabel}月分給料`,
+        amount: salaryPerPerson,
+        payer: "ランタナ", // お店から支払う
+        category: "給料分配", // ★重要：このカテゴリは利益計算から除外します
+        createdAt: serverTimestamp(),
+      });
+
+      // 浜田さんの給料
+      const docRef2 = doc(
+        collection(db, "artifacts", appId, "public", "data", "expenses")
+      );
+      batch.set(docRef2, {
+        date: today,
+        item: `${monthLabel}月分給料`,
+        amount: salaryPerPerson,
+        payer: "ランタナ", // お店から支払う
+        category: "給料分配",
+        createdAt: serverTimestamp(),
+      });
+
+      await batch.commit();
+      alert("給料を経費（給料分配）として記録しました！");
+    } catch (err) {
+      console.error(err);
+      alert("記録に失敗しました: " + err.message);
     }
   };
 
@@ -778,7 +825,7 @@ export default function App() {
   const getAggregatedData = () => {
     const dataByDate = {};
     let totalSalesAll = 0;
-    let totalExpensesAll = 0;
+    let totalExpensesAll = 0; // 給料分配以外の経費
     let totalTax10Sales = 0;
     let totalTax8Sales = 0;
 
@@ -835,6 +882,7 @@ export default function App() {
         });
     });
 
+    // ★重要: 「給料分配」カテゴリの経費は、利益計算（給料計算）から除外する
     targetExpenses.forEach((exp) => {
       const d = exp.date;
       if (!dataByDate[d])
@@ -855,8 +903,12 @@ export default function App() {
         };
 
       dataByDate[d].expenses += exp.amount;
-      totalExpensesAll += exp.amount;
       dataByDate[d].expenseDetails.push(exp);
+
+      // ここで除外判定
+      if (exp.category !== "給料分配") {
+        totalExpensesAll += exp.amount;
+      }
 
       if (exp.payer === "高橋") dataByDate[d].takahashiPay += exp.amount;
       if (exp.payer === "浜田") dataByDate[d].hamadaPay += exp.amount;
@@ -872,7 +924,7 @@ export default function App() {
     const tax10 = Math.floor((totalTax10Sales / 1.1) * 0.1);
     const totalTax = tax8 + tax10;
 
-    // 給料計算：売上(税込) - 経費 - 消費税(預り分) = 税引後利益
+    // 給料計算：売上(税込) - (給料以外の)経費 - 消費税(預り分) = 税引後利益
     const profitBeforeTax = totalSalesAll - totalExpensesAll;
     const profitAfterTax = profitBeforeTax - totalTax;
 
@@ -884,8 +936,11 @@ export default function App() {
       manualSalary !== null ? manualSalary : defaultSalaryPerPerson;
 
     // ランタナ貯金（端数＋調整分＋税金分）
+    // ※「給料分配」の経費は、すでに `funds`（資金残高）から減っているはず（またはこれから減る）なので、
+    // ここでの計算は「利益をどう配分するか」に特化する。
     const lantanaSavings = profitBeforeTax - finalSalaryPerPerson * 2;
 
+    // 重複防止ロジック
     const transferredAmount = funds
       .filter(
         (f) =>
@@ -897,10 +952,13 @@ export default function App() {
 
     const remainingLantanaSavings = lantanaSavings - transferredAmount;
 
+    // 資金残高の計算（これは全期間の生データ）
     const totalFundsAdded = funds.reduce((sum, f) => sum + f.amount, 0);
+    // ランタナ財布からの支出合計（給料分配も含む）
     const totalLantanaExpenses = expenses
       .filter((e) => e.payer === "ランタナ")
       .reduce((sum, e) => sum + e.amount, 0);
+
     const currentFundBalance = totalFundsAdded - totalLantanaExpenses;
 
     const totalNetSales = totalSalesAll - totalTax;
@@ -909,7 +967,7 @@ export default function App() {
       daily: sortedData,
       summary: {
         totalSales: totalSalesAll,
-        totalExpenses: totalExpensesAll,
+        totalExpenses: totalExpensesAll, // ここには給料分配を含めない（利益計算用）
         profit: profitBeforeTax, // 税込利益
         salaryPerPerson: finalSalaryPerPerson,
         defaultSalaryPerPerson,
@@ -1340,6 +1398,7 @@ export default function App() {
               <option>消耗品</option>
               <option>人件費</option>
               <option>委託費</option>
+              <option>給料分配</option>
               <option>その他</option>
             </select>
           </div>
@@ -1546,7 +1605,7 @@ export default function App() {
             </div>
           </div>
           <div className="bg-white p-3 rounded-lg border border-orange-100">
-            <p className="text-xs text-stone-500 mb-1">経費合計</p>
+            <p className="text-xs text-stone-500 mb-1">経費合計 (給料除く)</p>
             <p className="font-mono font-bold text-lg text-red-500">
               -¥{aggregated.summary.totalExpenses.toLocaleString()}
             </p>
@@ -1565,7 +1624,7 @@ export default function App() {
 
         <div className="bg-white p-4 rounded-xl border-2 border-orange-200 shadow-sm relative overflow-hidden">
           <div className="absolute top-0 right-0 bg-orange-100 text-orange-700 text-[10px] font-bold px-2 py-1 rounded-bl-lg">
-            利益÷2 (1000円未満切捨)
+            税引後利益÷2 (1000円未満切捨)
           </div>
           <div className="flex justify-between items-end mb-2">
             <div className="flex items-center gap-2">
@@ -1610,10 +1669,10 @@ export default function App() {
             )}
           </div>
 
-          <div className="border-t border-dashed border-stone-200 pt-2 text-sm">
-            <div className="flex justify-between items-center mb-1">
+          <div className="border-t border-dashed border-stone-200 pt-2 text-sm space-y-2">
+            <div className="flex justify-between items-center">
               <span className="flex items-center gap-1 text-stone-500">
-                <PiggyBank size={14} /> ランタナ貯金 (端数+調整分+税)
+                <PiggyBank size={14} /> ランタナ貯金 (端数+調整分)
               </span>
               <span className="font-mono font-bold text-stone-700">
                 ¥{aggregated.summary.lantanaSavings.toLocaleString()}
@@ -1637,7 +1696,19 @@ export default function App() {
                 }`}
                 disabled={aggregated.summary.remainingLantanaSavings <= 0}
               >
-                <ArrowRightCircle size={12} /> 資金へ移動
+                <ArrowRightCircle size={12} /> 残金(税・端数)を資金へ
+              </button>
+            </div>
+
+            {/* 給料記録ボタン */}
+            <div className="pt-2 border-t border-dashed border-stone-200 flex justify-end">
+              <button
+                onClick={() =>
+                  recordSalaryAsExpense(aggregated.summary.salaryPerPerson)
+                }
+                className="bg-orange-500 text-white px-3 py-1 rounded-full text-xs font-bold hover:bg-orange-600 shadow-md flex items-center gap-1"
+              >
+                <CheckCircle2 size={12} /> 給料を確定して記録
               </button>
             </div>
           </div>
@@ -1719,7 +1790,6 @@ export default function App() {
                       <tr className="bg-stone-50">
                         <td colSpan={6} className="p-4">
                           <div className="bg-white rounded-lg border border-stone-200 p-4 space-y-6">
-                            {/* Detailed Expenses with Delete */}
                             <div>
                               <h4 className="font-bold text-stone-700 mb-2 flex items-center gap-2 text-sm border-b pb-1">
                                 <DollarSign
@@ -1776,8 +1846,6 @@ export default function App() {
                                 </div>
                               )}
                             </div>
-
-                            {/* Detailed Orders with Delete */}
                             <div>
                               <h4 className="font-bold text-stone-700 mb-2 flex items-center justify-between gap-2 text-sm border-b pb-1">
                                 <span className="flex items-center gap-2">
@@ -1853,7 +1921,6 @@ export default function App() {
         </div>
       </div>
 
-      {/* Delete Confirmation Modal */}
       {deleteModal && (
         <div className="fixed inset-0 bg-black/60 z-50 flex items-center justify-center p-4 animate-in fade-in duration-200">
           <div className="bg-white rounded-2xl w-full max-w-sm p-6 text-center space-y-4 shadow-xl">
@@ -2186,6 +2253,293 @@ export default function App() {
                 確定する
               </Button>
             </div>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+
+  const renderMenuSettings = () => (
+    <div className="max-w-2xl mx-auto space-y-6 pb-20">
+      <div className="flex justify-between items-center mb-4">
+        <h2 className="text-xl font-bold text-stone-700 flex items-center gap-2">
+          <Settings className="text-orange-600" /> メニュー管理
+        </h2>
+        <Button onClick={() => setEditingMenu({})} className="text-sm">
+          <PlusCircle size={16} /> 新規追加
+        </Button>
+      </div>
+      <div className="space-y-3">
+        {menuItems.map((item) => (
+          <div
+            key={item.id}
+            className="bg-white p-4 rounded-xl border border-stone-200 flex justify-between items-center"
+          >
+            <div className="flex items-center gap-3">
+              <div
+                className={`w-12 h-12 rounded-lg ${item.imageColor} flex items-center justify-center text-stone-500`}
+              >
+                {item.type === "food" && <Utensils size={20} />}{" "}
+                {item.type === "drink" && <Coffee size={20} />}{" "}
+                {item.type === "dessert" && <ChefHat size={20} />}
+              </div>
+              <div>
+                <div className="font-bold text-stone-800">{item.name}</div>
+                <div className="text-xs text-stone-500">
+                  ¥{item.basePrice.toLocaleString()}{" "}
+                  {item.hasSets &&
+                    item.type === "food" &&
+                    `(A:¥${getPrice(item, "setA")}/B:¥${getPrice(
+                      item,
+                      "setB"
+                    )})`}
+                </div>
+              </div>
+            </div>
+            <div className="flex gap-2">
+              <button
+                onClick={() => setEditingMenu(item)}
+                className="p-2 text-stone-400 hover:text-orange-600 hover:bg-orange-50 rounded-lg"
+              >
+                <Edit2 size={18} />
+              </button>
+              <button
+                onClick={() => deleteMenuItem(item.id)}
+                className="p-2 text-stone-400 hover:text-red-600 hover:bg-red-50 rounded-lg"
+              >
+                <Trash2 size={18} />
+              </button>
+            </div>
+          </div>
+        ))}
+      </div>
+      {editingMenu && (
+        <div className="fixed inset-0 bg-black/60 z-50 flex items-center justify-center p-4">
+          <div className="bg-white rounded-2xl w-full max-w-md overflow-hidden shadow-xl animate-in fade-in zoom-in duration-200 h-[90vh] flex flex-col">
+            <div className="p-4 border-b flex justify-between items-center shrink-0">
+              <h3 className="font-bold text-lg">
+                {editingMenu.id ? "メニュー編集" : "新規メニュー追加"}
+              </h3>
+              <button
+                onClick={() => setEditingMenu(null)}
+                className="p-1 hover:bg-stone-100 rounded-full"
+              >
+                <X size={20} />
+              </button>
+            </div>
+            <form
+              onSubmit={saveMenuItem}
+              className="p-6 space-y-4 overflow-y-auto flex-1"
+            >
+              <input
+                type="hidden"
+                name="imageColor"
+                value={editingMenu.imageColor || ""}
+              />
+              <div>
+                <label className="block text-xs font-bold text-stone-500 mb-1">
+                  メニュー名
+                </label>
+                <input
+                  name="name"
+                  defaultValue={editingMenu.name}
+                  required
+                  className="w-full p-2 border rounded-lg"
+                  placeholder="例：季節のパスタ"
+                />
+              </div>
+              <div className="grid grid-cols-2 gap-4">
+                <div>
+                  <label className="block text-xs font-bold text-stone-500 mb-1">
+                    単品価格 (円)
+                  </label>
+                  <input
+                    name="basePrice"
+                    type="number"
+                    defaultValue={editingMenu.basePrice}
+                    required
+                    className="w-full p-2 border rounded-lg"
+                    placeholder="1000"
+                  />
+                </div>
+                <div>
+                  <label className="block text-xs font-bold text-stone-500 mb-1">
+                    種類
+                  </label>
+                  <select
+                    name="type"
+                    defaultValue={editingMenu.type || "food"}
+                    className="w-full p-2 border rounded-lg bg-white"
+                    onChange={(e) =>
+                      setEditingMenu({ ...editingMenu, type: e.target.value })
+                    }
+                  >
+                    <option value="food">食事</option>
+                    <option value="drink">ドリンク</option>
+                    <option value="dessert">デザート</option>
+                  </select>
+                </div>
+              </div>
+
+              {/* オプション設定フォーム */}
+              <div className="border-t border-stone-100 pt-4">
+                <div className="flex justify-between items-center mb-2">
+                  <label className="text-xs font-bold text-stone-500">
+                    オプション設定
+                  </label>
+                  <button
+                    type="button"
+                    onClick={() =>
+                      setEditingOptions([
+                        ...editingOptions,
+                        { label: "", price: 0 },
+                      ])
+                    }
+                    className="text-xs bg-stone-100 px-2 py-1 rounded hover:bg-stone-200 flex items-center gap-1"
+                  >
+                    <Plus size={12} /> 追加
+                  </button>
+                </div>
+                <div className="space-y-2">
+                  {editingOptions.map((opt, idx) => (
+                    <div key={idx} className="flex gap-2 items-center">
+                      <input
+                        placeholder="名称 (例: 大盛)"
+                        value={opt.label}
+                        onChange={(e) => {
+                          const newOpts = [...editingOptions];
+                          newOpts[idx].label = e.target.value;
+                          setEditingOptions(newOpts);
+                        }}
+                        className="flex-1 p-2 border rounded-lg text-sm"
+                      />
+                      <input
+                        type="number"
+                        placeholder="価格"
+                        value={opt.price}
+                        onChange={(e) => {
+                          const newOpts = [...editingOptions];
+                          newOpts[idx].price = Number(e.target.value);
+                          setEditingOptions(newOpts);
+                        }}
+                        className="w-20 p-2 border rounded-lg text-sm"
+                      />
+                      <button
+                        type="button"
+                        onClick={() =>
+                          setEditingOptions(
+                            editingOptions.filter((_, i) => i !== idx)
+                          )
+                        }
+                        className="p-2 text-stone-400 hover:text-red-500"
+                      >
+                        <Trash2 size={16} />
+                      </button>
+                    </div>
+                  ))}
+                  {editingOptions.length === 0 && (
+                    <p className="text-xs text-stone-400 text-center py-2">
+                      オプションなし
+                    </p>
+                  )}
+                </div>
+              </div>
+
+              <div className="space-y-4 pt-4 border-t border-stone-100">
+                <label className="flex items-center gap-2 text-sm text-stone-700 cursor-pointer font-bold">
+                  <input
+                    type="checkbox"
+                    name="hasSets"
+                    defaultChecked={editingMenu.hasSets}
+                    className="w-4 h-4 text-orange-600 rounded"
+                    onChange={(e) =>
+                      setEditingMenu({
+                        ...editingMenu,
+                        hasSets: e.target.checked,
+                      })
+                    }
+                  />
+                  セット販売を有効にする
+                </label>
+                {(editingMenu.hasSets || !editingMenu.id) &&
+                  (editingMenu.type === "food" || !editingMenu.type) && (
+                    <div className="pl-6 space-y-3 bg-stone-50 p-3 rounded-lg">
+                      <div>
+                        <label className="block text-xs font-bold text-orange-600 mb-1">
+                          Aセット価格 (ドリンク付)
+                        </label>
+                        <input
+                          name="priceSetA"
+                          type="number"
+                          defaultValue={editingMenu.priceSetA}
+                          placeholder={`自動計算: ¥${
+                            (editingMenu.basePrice || 0) + 300
+                          }`}
+                          className="w-full p-2 border border-orange-200 rounded-lg bg-white"
+                        />
+                        <p className="text-[10px] text-stone-400 mt-1">
+                          ※空欄の場合は自動で +300円 になります
+                        </p>
+                      </div>
+                      <div>
+                        <label className="block text-xs font-bold text-orange-600 mb-1">
+                          Bセット価格 (ドリンク・デザート付)
+                        </label>
+                        <input
+                          name="priceSetB"
+                          type="number"
+                          defaultValue={editingMenu.priceSetB}
+                          placeholder={`自動計算: ¥${
+                            (editingMenu.basePrice || 0) + 700
+                          }`}
+                          className="w-full p-2 border border-orange-200 rounded-lg bg-white"
+                        />
+                        <p className="text-[10px] text-stone-400 mt-1">
+                          ※空欄の場合は自動で +700円 になります
+                        </p>
+                      </div>
+                    </div>
+                  )}
+                {(editingMenu.hasSets || !editingMenu.id) &&
+                  editingMenu.type === "dessert" && (
+                    <div className="pl-6 bg-pink-50 p-3 rounded-lg">
+                      <label className="block text-xs font-bold text-pink-600 mb-1">
+                        デザートセット価格 (ドリンク付)
+                      </label>
+                      <input
+                        name="priceDessertSet"
+                        type="number"
+                        defaultValue={editingMenu.priceDessertSet}
+                        placeholder={`自動計算: ¥${
+                          (editingMenu.basePrice || 0) + 300
+                        }`}
+                        className="w-full p-2 border border-pink-200 rounded-lg bg-white"
+                      />
+                    </div>
+                  )}
+                <label className="flex items-center gap-2 text-sm text-stone-700 cursor-pointer pt-2">
+                  <input
+                    type="checkbox"
+                    name="canTakeout"
+                    defaultChecked={editingMenu.canTakeout}
+                    className="w-4 h-4 text-orange-600 rounded"
+                  />
+                  テイクアウト可能にする
+                </label>
+              </div>
+              <div className="pt-4 flex gap-3 shrink-0">
+                <Button
+                  variant="secondary"
+                  className="flex-1"
+                  onClick={() => setEditingMenu(null)}
+                >
+                  キャンセル
+                </Button>
+                <Button type="submit" className="flex-1">
+                  保存する
+                </Button>
+              </div>
+            </form>
           </div>
         </div>
       )}
